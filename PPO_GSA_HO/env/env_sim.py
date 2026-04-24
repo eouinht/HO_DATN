@@ -3,8 +3,7 @@ import numpy as np, copy
 from numpy.linalg import norm
 import networkx as nx
 
-from config import bandwidth_per_RB, max_RBs_per_UE, P_i_random_list, A_j_random_list, A_m_random_list, bw_ru_du_random_list, bw_du_cu_random_list, P_ib_sk_val, k_DU, k_CU, SLICE_PRESET
-
+from config import *
 
 class UEManager:
     def __init__(self, coordinates_RU):
