@@ -484,46 +484,130 @@ class HandOverEnv:
         return state
     
     def calculate_latency(self, distances_RU_UE, throughput_bps, packet_size_bits, cycles_per_packet, lambda_default_pps, cpu_DU_req, cpu_CU_req):
+        """
+        Tính độ trễ đầu-cuối của một UE.
+        Thành phần độ trễ:
+            1. Lan truyền trên liên kết RU-UE
+            2. Truyền dữ liệu
+            3. Chờ trong hàng đợi tại DU và CU
+            4. Xử lý tại DU và CU
+
+        Mô hình hàng đợi:
+            M/M/1 tại DU và CU
+
+        Đơn vị đầu ra:
+            giây (s)
+        """
         eps = 1e-12
-        c_speed = 3e8  # tốc độ ánh sáng (m/s)
-        #xhaul_delay_s = 1e-3  # độ trễ xhaul (s)
+        c_speed = 3e8  # Tốc độ ánh sáng [m/s]
 
-        latency_path = {}
-        mu_du = cpu_DU_req / cycles_per_packet
-        mu_cu = cpu_CU_req / cycles_per_packet
-        rho_j = lambda_default_pps / mu_du
-        # -----------------------------
-        # 1) Propagation latency
-        # -----------------------------
-        #L_prop = ((distances_RU_UE / c_speed) + xhaul_delay_s) * 1.0  # Phi_i 
-        L_prop = ((distances_RU_UE / c_speed)) * 1.0  # Phi_i 
+        # Ép kiểu để tránh lỗi do truyền vào numpy scalar hoặc int
+        throughput_bps = float(throughput_bps)
+        packet_size_bits = float(packet_size_bits)
+        cycles_per_packet = float(cycles_per_packet)
+        lambda_pps = float(lambda_default_pps)
+        cpu_DU_req = float(cpu_DU_req)
+        cpu_CU_req = float(cpu_CU_req)
 
-        # -----------------------------
-        # 2) Transmission latency
-        # -----------------------------
+        # -----------------------------------------------------
+        # 1. Propagation latency: RU -> UE
+        # -----------------------------------------------------
+        L_prop = float(distances_RU_UE) / c_speed
+
+        # Không thể truyền dữ liệu nếu throughput không hợp lệ
+        if throughput_bps <= eps:
+            return float("inf"), {
+                "prop": L_prop,
+                "trans": float("inf"),
+                "queue_du": float("inf"),
+                "queue_cu": float("inf"),
+                "queu": float("inf"),
+                "proc_du": float("inf"),
+                "proc_cu": float("inf"),
+                "total": float("inf"),
+                "reason": "invalid throughput",
+            }
+
+        # -----------------------------------------------------
+        # 2. Transmission latency
+        # -----------------------------------------------------
         L_trans = packet_size_bits / throughput_bps
 
-        # -----------------------------
-        # 3) Queuing latency
-        # -----------------------------
-        L_queu = rho_j / (mu_du - lambda_default_pps)
-        
-        # -----------------------------
-        # 4) Processing latency
-        # -----------------------------
-        L_proc_du = 1 / (mu_du - lambda_default_pps)
-        L_proc_cu = 1 / (mu_cu - lambda_default_pps)
-        # -----------------------------
-        # 5) Total E2E latency
-        # -----------------------------
-        total_latency = L_prop + L_trans + L_queu + L_proc_du + L_proc_cu
+        # Không thể xác định tốc độ phục vụ nếu số cycle/gói không hợp lệ
+        if cycles_per_packet <= eps:
+            return float("inf"), {
+                "prop": L_prop,
+                "trans": L_trans,
+                "queue_du": float("inf"),
+                "queue_cu": float("inf"),
+                "queu": float("inf"),
+                "proc_du": float("inf"),
+                "proc_cu": float("inf"),
+                "total": float("inf"),
+                "reason": "invalid cycles_per_packet",
+            }
 
-        latency_path= {
+        # -----------------------------------------------------
+        # 3. Service rate tại DU và CU [packet/s]
+        # -----------------------------------------------------
+        mu_du = cpu_DU_req / cycles_per_packet
+        mu_cu = cpu_CU_req / cycles_per_packet
+
+        # Điều kiện ổn định của hàng đợi M/M/1:
+        # lambda < mu
+        if mu_du <= lambda_pps + eps or mu_cu <= lambda_pps + eps:
+            return float("inf"), {
+                "prop": L_prop,
+                "trans": L_trans,
+                "queue_du": float("inf"),
+                "queue_cu": float("inf"),
+                "queu": float("inf"),
+                "proc_du": float("inf"),
+                "proc_cu": float("inf"),
+                "total": float("inf"),
+                "reason": "queue overload",
+            }
+
+        # -----------------------------------------------------
+        # 4. Queuing latency theo mô hình M/M/1
+        # -----------------------------------------------------
+        rho_du = lambda_pps / mu_du
+        rho_cu = lambda_pps / mu_cu
+
+        L_queue_du = rho_du / (mu_du - lambda_pps)
+        L_queue_cu = rho_cu / (mu_cu - lambda_pps)
+
+        # -----------------------------------------------------
+        # 5. Processing latency
+        # -----------------------------------------------------
+        L_proc_du = 1.0 / mu_du
+        L_proc_cu = 1.0 / mu_cu
+
+        # -----------------------------------------------------
+        # 6. Total E2E latency
+        # -----------------------------------------------------
+        L_queue_total = L_queue_du + L_queue_cu
+
+        total_latency = (
+            L_prop
+            + L_trans
+            + L_queue_total
+            + L_proc_du
+            + L_proc_cu
+        )
+
+        latency_path = {
             "prop": L_prop,
             "trans": L_trans,
-            "queu": L_queu,
+            "queu": L_queue_total,
+            "queue_du": L_queue_du,
+            "queue_cu": L_queue_cu,
             "proc_du": L_proc_du,
             "proc_cu": L_proc_cu,
+            "mu_du": mu_du,
+            "mu_cu": mu_cu,
+            "rho_du": rho_du,
+            "rho_cu": rho_cu,
             "total": total_latency,
         }
 
