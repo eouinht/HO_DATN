@@ -8,8 +8,8 @@ yarn-debug.log*
 yarn-error.log*
 
 # Bỏ qua toàn bộ một thư mục chuyên chứa log (ví dụ thư mục tên là logs/ hoặc log/)
-logs/
-log/
+/PPO_GSA_HO/logs/
+/PPO_GSA_HO/log/
 
-results/
-results_evaluation/
+/PPO_GSA_HO/results/
+/PPO_GSA_HO/results_evaluation/
