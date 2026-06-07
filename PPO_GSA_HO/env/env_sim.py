@@ -2,9 +2,11 @@ import numpy as np, copy
 # Local modules - must exist
 from numpy.linalg import norm
 import networkx as nx
-
+from datetime import datetime
 from config import *
-
+import os
+import csv
+from pathlib import Path
 class UEManager:
     def __init__(self, coordinates_RU):
         self.radius_in = 10
@@ -447,7 +449,7 @@ class ResourceManager:
 # ====================== ENV ============================
 # =======================================================
 class HandOverEnv:
-    def __init__(self, num_UEs, num_RBs, total_nodes, num_RUs, num_DUs, num_CUs):
+    def __init__(self, num_UEs, num_RBs, total_nodes, num_RUs, num_DUs, num_CUs, radio_log_path=None):
 
         self.w_acc = 1/4        # Trọng số accept
         self.w_thr = 1/4        # Trọng số throughtput
@@ -471,6 +473,592 @@ class HandOverEnv:
         self.UE_manager = UEManager(self.resource_manager.coordinates_RU)
         self.resource_manager.reset()
         _ = self.UE_manager.add_UEs_requests(self.num_UEs)
+        # =====================================================
+        # Radio metric logger
+        # =====================================================
+        self.radio_debug_step = 0
+        self.radio_log_file = None
+        self.radio_log_writer = None
+
+        if radio_log_path is not None:
+            radio_log_path = Path(radio_log_path).resolve()
+            radio_log_path.parent.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            self.radio_log_path = str(radio_log_path)
+
+            self.radio_log_file = open(
+                self.radio_log_path,
+                mode="w",
+                newline="",
+                encoding="utf-8",
+                buffering=1,
+            )
+
+            self.radio_log_writer = csv.DictWriter(
+                self.radio_log_file,
+                fieldnames = [
+                    "step",
+                    "ue_id",
+                    "slice_type",
+                    "ru_choice",
+                    "num_rb_alloc",
+                    "slice_max_rb",
+                    "power_alloc_w",
+                    "power_per_rb_w",
+                    "snr_linear",
+                    "snr_db",
+                    "throughput_mbps",
+                    "r_min_mbps",
+                    "success",
+                    "reason",
+
+                    # Thông tin tài nguyên RU hiện tại
+                    "ru_power_remaining_w",
+
+                    # Giá trị tối đa tại RU đang được chọn
+                    "max_rb_at_selected_ru",
+                    "max_power_at_selected_ru_w",
+                    "max_snr_at_selected_ru_db",
+                    "max_throughput_at_selected_ru_mbps",
+
+                    # RU tốt nhất trong trạng thái hiện tại
+                    "best_ru",
+                    "best_ru_snr_db",
+                    "best_ru_max_throughput_mbps",
+                ],  
+            )
+
+            self.radio_log_writer.writeheader()
+            self.radio_log_file.flush()
+
+            print(
+                f"[RADIO LOG] File created at: "
+                f"{self.radio_log_path}"
+            )
+        else:
+            print(
+                "[RADIO LOG] Disabled: "
+                "radio_log_path is None"
+            )
+    def build_radio_metrics(
+        self,
+        UE_id,
+        UE,
+        RU_choice,
+        num_RB_alloc,
+        power_alloc,
+    ):
+        """
+        Thu thập radio metrics của action hiện tại.
+
+        Lưu ý:
+            Môi trường hiện chưa xét interference giữa các RU.
+            Vì vậy SINR được xấp xỉ bằng SNR.
+        """
+        eps = 1e-12
+
+        gain_list = np.asarray(
+            UE.get("gain", []),
+            dtype=float,
+        )
+
+        if RU_choice < 0 or RU_choice >= len(gain_list):
+            return None
+
+        num_RB_alloc = max(
+            1,
+            int(num_RB_alloc),
+        )
+
+        power_alloc = float(power_alloc)
+
+        bandwidth_per_RB = float(
+            self.resource_manager.bandwidth_per_RB
+        )
+
+        gain = float(gain_list[RU_choice])
+
+        # =====================================================
+        # Metrics của action thực tế
+        # =====================================================
+        power_per_RB = power_alloc / num_RB_alloc
+
+        snr_linear = (
+            power_per_RB
+            * gain
+        )
+
+        snr_db = 10.0 * np.log10(
+            max(snr_linear, eps)
+        )
+
+        throughput_bps = (
+            num_RB_alloc
+            * bandwidth_per_RB
+            * np.log2(
+                1.0 + snr_linear
+            )
+        )
+
+        # =====================================================
+        # RB limit theo slice
+        # =====================================================
+        slice_max_RB = int(
+            UE.get(
+                "max_RBs",
+                self.resource_manager.max_RBs_per_UE,
+            )
+        )
+
+        rb_remaining = int(
+            self.resource_manager.RB_remaining
+        )
+
+        ru_power_remaining = float(
+            self.resource_manager.RU_power_remaining[
+                RU_choice
+            ]
+        )
+
+        max_action_power = float(
+            np.max(
+                self.resource_manager.P_ib_sk_val
+            )
+        )
+
+        max_RB_effective = max(
+            1,
+            min(
+                slice_max_RB,
+                rb_remaining,
+            ),
+        )
+
+        max_power_effective = max(
+            0.0,
+            min(
+                max_action_power,
+                ru_power_remaining,
+            ),
+        )
+
+        max_power_per_RB = (
+            max_power_effective
+            / max_RB_effective
+        )
+
+        max_snr_linear = (
+            max_power_per_RB
+            * gain
+        )
+
+        max_snr_db = 10.0 * np.log10(
+            max(max_snr_linear, eps)
+        )
+
+        max_throughput_bps = (
+            max_RB_effective
+            * bandwidth_per_RB
+            * np.log2(
+                1.0 + max_snr_linear
+            )
+        )
+
+        # =====================================================
+        # RU tốt nhất theo throughput cực đại
+        # =====================================================
+        best_RU = None
+        best_RU_snr_db = None
+        best_RU_max_throughput_bps = -1.0
+
+        for ru_idx, ru_gain in enumerate(gain_list):
+            ru_power_available = float(
+                self.resource_manager.RU_power_remaining[
+                    ru_idx
+                ]
+            )
+
+            ru_max_power = max(
+                0.0,
+                min(
+                    max_action_power,
+                    ru_power_available,
+                ),
+            )
+
+            ru_power_per_RB = (
+                ru_max_power
+                / max_RB_effective
+            )
+
+            ru_snr_linear = (
+                ru_power_per_RB
+                * float(ru_gain)
+            )
+
+            ru_throughput_bps = (
+                max_RB_effective
+                * bandwidth_per_RB
+                * np.log2(
+                    1.0 + ru_snr_linear
+                )
+            )
+
+            if ru_throughput_bps > best_RU_max_throughput_bps:
+                best_RU = int(ru_idx)
+
+                best_RU_snr_db = 10.0 * np.log10(
+                    max(ru_snr_linear, eps)
+                )
+
+                best_RU_max_throughput_bps = (
+                    ru_throughput_bps
+                )
+
+        return {
+            "step": int(self.radio_debug_step),
+            "ue_id": int(UE_id),
+            "slice_type": UE.get(
+                "type",
+                UE.get("slice_type", "unknown"),
+            ),
+            "ru_choice": int(RU_choice),
+            "num_rb_alloc": int(num_RB_alloc),
+            "slice_max_rb": int(slice_max_RB),
+            "power_alloc_w": float(power_alloc),
+            "power_per_rb_w": float(power_per_RB),
+            "snr_linear": float(snr_linear),
+            "snr_db": float(snr_db),
+            "throughput_mbps": float(
+                throughput_bps / 1e6
+            ),
+            "r_min_mbps": float(
+                UE["R_min"] / 1e6
+            ),
+            "ru_power_remaining_w": float(
+                ru_power_remaining
+            ),
+            "max_rb_at_selected_ru": int(
+                max_RB_effective
+            ),
+            "max_power_at_selected_ru_w": float(
+                max_power_effective
+            ),
+            "max_snr_at_selected_ru_db": float(
+                max_snr_db
+            ),
+            "max_throughput_at_selected_ru_mbps": float(
+                max_throughput_bps / 1e6
+            ),
+            "best_ru": int(best_RU),
+            "best_ru_snr_db": float(
+                best_RU_snr_db
+            ),
+            "best_ru_max_throughput_mbps": float(
+                best_RU_max_throughput_bps / 1e6
+            ),
+        }
+    def write_radio_metrics(
+        self,
+        metrics,
+        success,
+        reason,
+    ):
+        """
+        Ghi một dòng radio metrics xuống file CSV.
+        Flush ngay sau mỗi dòng để tránh mất dữ liệu nếu chương trình dừng đột ngột.
+        """
+        if not DEBUG_RADIO_METRICS:
+            return
+
+        if metrics is None:
+            return
+
+        if (
+            DEBUG_RADIO_UE_ID is not None
+            and int(metrics["ue_id"])
+            != int(DEBUG_RADIO_UE_ID)
+        ):
+            return
+
+        metrics = dict(metrics)
+
+        metrics["success"] = bool(success)
+        metrics["reason"] = str(reason)
+
+        self.radio_log_writer.writerow(metrics)
+
+        # Đảm bảo dữ liệu được đẩy ngay xuống file
+        self.radio_log_file.flush()
+
+        print(
+            f"[RADIO] "
+            f"UE={metrics['ue_id']} | "
+            f"Slice={metrics['slice_type']} | "
+            f"RU={metrics['ru_choice']} | "
+            f"RB={metrics['num_rb_alloc']}/"
+            f"{metrics['slice_max_rb']} | "
+            f"SNR={metrics['snr_db']:.2f} dB | "
+            f"R={metrics['throughput_mbps']:.2f} Mbps | "
+            f"R_min={metrics['r_min_mbps']:.2f} Mbps | "
+            f"R_max={metrics['max_throughput_at_selected_ru_mbps']:.2f} Mbps | "
+            f"Success={metrics['success']} | "
+            f"Reason={metrics['reason']}"
+        )
+    def write_radio_metrics_csv(
+        self,
+        UE_id,
+        UE,
+        RU_choice,
+        num_RB_alloc,
+        power_alloc,
+        success,
+        reason,
+    ):
+        """
+        Ghi thông tin radio của từng action xuống file CSV.
+
+        Lưu ý:
+            Môi trường hiện chưa xét interference giữa các RU.
+            Do đó SINR đang được xấp xỉ bằng SNR.
+        """
+        eps = 1e-12
+
+        # =====================================================
+        # 1. Đường dẫn log tuyệt đối
+        # =====================================================
+        log_path = Path("./logs/radio_metrics.csv").resolve()
+
+        log_path.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        # =====================================================
+        # 2. Kiểm tra gain và RU
+        # =====================================================
+        gain_list = np.asarray(
+            UE.get("gain", []),
+            dtype=float,
+        )
+
+        if RU_choice < 0 or RU_choice >= len(gain_list):
+            return
+
+        num_RB_alloc = max(
+            1,
+            int(num_RB_alloc),
+        )
+
+        power_alloc = float(power_alloc)
+
+        # =====================================================
+        # 3. Tính SNR và throughput thực tế
+        # =====================================================
+        bandwidth_per_RB = float(
+            self.resource_manager.bandwidth_per_RB
+        )
+
+        gain = float(
+            gain_list[RU_choice]
+        )
+
+        power_per_RB = (
+            power_alloc
+            / num_RB_alloc
+        )
+
+        snr_linear = (
+            power_per_RB
+            * gain
+        )
+
+        snr_db = 10.0 * np.log10(
+            max(
+                snr_linear,
+                eps,
+            )
+        )
+
+        throughput_bps = (
+            num_RB_alloc
+            * bandwidth_per_RB
+            * np.log2(
+                1.0
+                +
+                snr_linear
+            )
+        )
+
+        # =====================================================
+        # 4. Tính throughput tối đa tại RU hiện tại
+        #    Giữ nguyên max_RBs_per_UE = 10
+        # =====================================================
+        max_rb = int(
+            self.resource_manager.max_RBs_per_UE
+        )
+
+        ru_power_remaining = float(
+            self.resource_manager.RU_power_remaining[
+                RU_choice
+            ]
+        )
+
+        max_power_level = float(
+            np.max(
+                self.resource_manager.P_ib_sk_val
+            )
+        )
+
+        max_power_effective = min(
+            max_power_level,
+            ru_power_remaining,
+        )
+
+        max_power_per_RB = (
+            max_power_effective
+            /
+            max_rb
+        )
+
+        max_snr_linear = (
+            max_power_per_RB
+            *
+            gain
+        )
+
+        max_snr_db = 10.0 * np.log10(
+            max(
+                max_snr_linear,
+                eps,
+            )
+        )
+
+        max_throughput_bps = (
+            max_rb
+            *
+            bandwidth_per_RB
+            *
+            np.log2(
+                1.0
+                +
+                max_snr_linear
+            )
+        )
+
+        # =====================================================
+        # 5. Tạo header và dữ liệu
+        # =====================================================
+        fieldnames = [
+            "ue_id",
+            "slice_type",
+            "ru_choice",
+            "num_rb_alloc",
+            "max_rb",
+            "power_alloc_w",
+            "power_per_rb_w",
+            "snr_linear",
+            "snr_db",
+            "throughput_mbps",
+            "r_min_mbps",
+            "ru_power_remaining_w",
+            "max_power_effective_w",
+            "max_snr_db",
+            "max_throughput_mbps",
+            "success",
+            "reason",
+        ]
+
+        row = {
+            "ue_id": int(UE_id),
+            "slice_type": UE.get(
+                "type",
+                UE.get(
+                    "slice_type",
+                    "unknown",
+                ),
+            ),
+            "ru_choice": int(RU_choice),
+            "num_rb_alloc": int(
+                num_RB_alloc
+            ),
+            "max_rb": int(
+                max_rb
+            ),
+            "power_alloc_w": float(
+                power_alloc
+            ),
+            "power_per_rb_w": float(
+                power_per_RB
+            ),
+            "snr_linear": float(
+                snr_linear
+            ),
+            "snr_db": float(
+                snr_db
+            ),
+            "throughput_mbps": float(
+                throughput_bps
+                /
+                1e6
+            ),
+            "r_min_mbps": float(
+                UE["R_min"]
+                /
+                1e6
+            ),
+            "ru_power_remaining_w": float(
+                ru_power_remaining
+            ),
+            "max_power_effective_w": float(
+                max_power_effective
+            ),
+            "max_snr_db": float(
+                max_snr_db
+            ),
+            "max_throughput_mbps": float(
+                max_throughput_bps
+                /
+                1e6
+            ),
+            "success": bool(
+                success
+            ),
+            "reason": str(
+                reason
+            ),
+        }
+
+        # =====================================================
+        # 6. Ghi file ngay lập tức
+        # =====================================================
+        file_exists = log_path.exists()
+
+        with open(
+            log_path,
+            mode="a",
+            newline="",
+            encoding="utf-8",
+        ) as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=fieldnames,
+            )
+
+            if not file_exists:
+                writer.writeheader()
+
+            writer.writerow(row)
+
+            # Đẩy dữ liệu xuống ổ đĩa ngay
+            f.flush()
+
+        print(
+            f"[RADIO LOG] Written to: {log_path}"
+        )
     # ======================================================================
     # Basics
     # ======================================================================
@@ -703,7 +1291,7 @@ class HandOverEnv:
 
 
     def check_action_valid(self, UE_id, handover_flag, RU, DU, CU, RB, power):
-
+        UE = self.UE_manager.UE_requests[UE_id]
         if UE_id not in self.UE_manager.UE_requests:
             return False, 
         
@@ -719,9 +1307,18 @@ class HandOverEnv:
         if not (0 <= CU < self.num_CUs):
             return False
 
-        if RB < 0 or RB > self.resource_manager.max_RBs_per_UE:
-            return False
+        # if RB < 0 or RB > self.resource_manager.max_RBs_per_UE:
+        #     return False
+        slice_max_RBs = int(
+            UE.get(
+                "max_RBs",
+                self.resource_manager.max_RBs_per_UE,
+            )
+        )
 
+        if RB < 1 or RB > slice_max_RBs:
+            return False
+        
         if RB > self.resource_manager.RB_remaining:
             return False
 
@@ -793,7 +1390,29 @@ class HandOverEnv:
                     is_handover = 0
                     is_pingpong = 0
                     # Check xem việc quyết định mapping và phân bổ tài nguyên có đảm bảo các điều kiện ràng buộc
+                    # radio_metrics = self.build_radio_metrics(
+                    #     UE_id=UE_idx,
+                    #     UE=UE,
+                    #     RU_choice=RU_choice,
+                    #     num_RB_alloc=num_RB_alloc,
+                    #     power_alloc=power_alloc,
+                    # )
+                    # Check xem việc quyết định mapping và phân bổ tài nguyên có đảm bảo các điều kiện ràng buộc
                     feasible, msg = self.check_feasible(UE, RU_choice, DU_choice, CU_choice, num_RB_alloc, power_alloc)
+                    self.write_radio_metrics_csv(
+                        UE_id=UE_idx,
+                        UE=UE,
+                        RU_choice=RU_choice,
+                        num_RB_alloc=num_RB_alloc,
+                        power_alloc=power_alloc,
+                        success=feasible,
+                        reason=msg,
+                    )
+                    # self.write_radio_metrics(
+                    #     metrics=radio_metrics,
+                    #     success=feasible,
+                    #     reason=msg,
+                    # )
                     if not feasible:
                         reward = 0
                         self.UE_manager.update_UE_request(UE_idx, {
@@ -874,7 +1493,29 @@ class HandOverEnv:
                 # Check: nếu là handover thật
                 if RU_choice != prev_RU:
                     # Check xem việc quyết định mapping và phân bổ tài nguyên có đảm bảo các điều kiện ràng buộc
+                    # radio_metrics = self.build_radio_metrics(
+                    #     UE_id=UE_idx,
+                    #     UE=UE,
+                    #     RU_choice=RU_choice,
+                    #     num_RB_alloc=num_RB_alloc,
+                    #     power_alloc=power_alloc,
+                    # )
+                    # Check xem việc quyết định mapping và phân bổ tài nguyên có đảm bảo các điều kiện ràng buộc
                     feasible, msg = self.check_feasible(UE, RU_choice, DU_choice, CU_choice, num_RB_alloc, power_alloc)
+                    self.write_radio_metrics_csv(
+                        UE_id=UE_idx,
+                        UE=UE,
+                        RU_choice=RU_choice,
+                        num_RB_alloc=num_RB_alloc,
+                        power_alloc=power_alloc,
+                        success=feasible,
+                        reason=msg,
+                    )
+                    # self.write_radio_metrics(
+                    #     metrics=radio_metrics,
+                    #     success=feasible,
+                    #     reason=msg,
+                    # )
 
                     # Nếu handover sang RU mới không đảm bảo ràng buộc
                     if not feasible:
@@ -1026,9 +1667,31 @@ class HandOverEnv:
             is_pingpong = 0
             # UE này chưa được mapping trước đó nên không cần release tài nguyên
 
+            # radio_metrics = self.build_radio_metrics(
+            #     UE_id=UE_idx,
+            #     UE=UE,
+            #     RU_choice=RU_choice,
+            #     num_RB_alloc=num_RB_alloc,
+            #     power_alloc=power_alloc,
+            # )
             # Check xem việc quyết định mapping và phân bổ tài nguyên có đảm bảo các điều kiện ràng buộc
             feasible, msg = self.check_feasible(UE, RU_choice, DU_choice, CU_choice, num_RB_alloc, power_alloc)
+            self.write_radio_metrics_csv(
+                UE_id=UE_idx,
+                UE=UE,
+                RU_choice=RU_choice,
+                num_RB_alloc=num_RB_alloc,
+                power_alloc=power_alloc,
+                success=feasible,
+                reason=msg,
+            )
+            # self.write_radio_metrics(
+            #     metrics=radio_metrics,
+            #     success=feasible,
+            #     reason=msg,
+            # )
 
+            self.radio_debug_step += 1
             # Không thoả mãn
             if not feasible:
                 reward = 0
@@ -1096,3 +1759,9 @@ class HandOverEnv:
         if self.UE_manager.check_UE_all_inactive():
             return True
         return False
+    
+    def close(self):
+        if self.radio_log_file is not None:
+            self.radio_log_file.flush()
+            self.radio_log_file.close()
+            self.radio_log_file = None

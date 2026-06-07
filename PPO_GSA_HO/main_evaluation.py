@@ -174,7 +174,7 @@ def main():
     run_root.mkdir(parents=True, exist_ok=True)
 
     base_seed = 20260413
-    max_episode = 5
+    max_episode = 500
 
     for num_UEs, num_RBs, num_RUs, num_DUs, num_CUs in configs:
         print("\n==============================")

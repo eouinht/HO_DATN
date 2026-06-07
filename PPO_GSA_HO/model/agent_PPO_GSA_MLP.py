@@ -626,14 +626,20 @@ class PPOAgent:
 
         return rb_rem, ru_rem, du_rem, cu_rem
 
-    def _masked_categorical(self, logits, valid_mask):
+    def _masked_categorical(self, logits, valid_mask=None):
         if logits.numel() == 0:
             raise ValueError("Empty logits.")
-        if valid_mask is None or valid_mask.sum() == 0:
-            valid_mask = torch.ones_like(logits, dtype=torch.bool)
-        masked = logits.clone()
-        masked[~valid_mask] = -1e9
-        return Categorical(logits=masked)
+
+        if valid_mask is None:
+            return Categorical(logits=logits)
+
+        if valid_mask.sum() == 0:
+            raise RuntimeError("No valid action after applying mask.")
+
+        masked_logits = logits.clone()
+        masked_logits[~valid_mask] = -1e9
+
+        return Categorical(logits=masked_logits)
 
     def _sample_from_logits(self, logits, valid_mask=None):
         dist = self._masked_categorical(logits, valid_mask)
@@ -671,7 +677,8 @@ class PPOAgent:
             du_connect_from_cu = np.ones_like(du_rem, dtype=bool)
             cu_connect = np.ones_like(cu_rem, dtype=bool)
 
-        ru_valid = (ru_rem > 1e-12) & ru_connect
+        min_power = float(np.min(self.power_levels))
+        ru_valid = ((ru_rem + 1e-12 >= min_power)& ru_connect)
         du_valid = (du_rem > 1e-12) & du_connect_from_ru & du_connect_from_cu
         cu_valid = (cu_rem > 1e-12) & cu_connect
 
@@ -686,8 +693,39 @@ class PPOAgent:
         if len(cu_valid) > 0 and cu_valid.sum() == 0:
             cu_valid[:] = True
 
-        rb_max = max(1, min(self.policy.max_RBs_per_UE, rb_rem))
-        rb_valid = torch.zeros(self.policy.max_RBs_per_UE, dtype=torch.bool, device=self.device)
+        # rb_max = max(1, min(self.policy.max_RBs_per_UE, rb_rem))
+        # rb_valid = torch.zeros(self.policy.max_RBs_per_UE, dtype=torch.bool, device=self.device)
+        # rb_valid[:rb_max] = True
+        # =====================================================
+        # RB mask theo từng loại slice
+        # =====================================================
+        UE = self._get_ue_raw(
+            raw_state,
+            ue_id,
+        )
+
+        slice_max_RBs = int(
+            UE.get(
+                "max_RBs",
+                self.policy.max_RBs_per_UE,
+            )
+        )
+
+        rb_max = max(
+            1,
+            min(
+                self.policy.max_RBs_per_UE,
+                slice_max_RBs,
+                rb_rem,
+            ),
+        )
+
+        rb_valid = torch.zeros(
+            self.policy.max_RBs_per_UE,
+            dtype=torch.bool,
+            device=self.device,
+        )
+
         rb_valid[:rb_max] = True
 
         return (
@@ -735,18 +773,41 @@ class PPOAgent:
 
             req_vec = req_emb[req_idx]
 
-            prev_ru_local = int(prev["RU"]) if has_prev and prev.get("RU") is not None else None
-            ru_valid, du_valid, cu_valid, rb_valid, ru_rem = self._build_valid_masks(
-                raw_state,
-                ue_id,
-                exclude_prev_ru_local=prev_ru_local,
+            prev_ru_local = (
+                int(prev["RU"])
+                if has_prev and prev.get("RU") is not None
+                else None
             )
 
+            # =====================================================
+            # Build resource masks
+            # Không loại RU cũ ở bước này.
+            # RU cũ chỉ bị loại nếu agent thực sự chọn handover.
+            # =====================================================
+            ru_valid, du_valid, cu_valid, rb_valid, ru_rem = (
+                self._build_valid_masks(
+                    raw_state,
+                    ue_id,
+                    exclude_prev_ru_local=None,
+                )
+            )
+
+            # =====================================================
+            # Sample handover mode
+            # =====================================================
             mode_sampled = False
+
             if has_prev and int(ru_valid.sum().item()) > 1:
-                mode_dist = Categorical(logits=self.policy.score_mode(req_vec, graph_emb))
+                mode_dist = Categorical(
+                    logits=self.policy.score_mode(
+                        req_vec,
+                        graph_emb,
+                    )
+                )
+
                 mode_t = mode_dist.sample()
                 handover_flag = int(mode_t.item())
+
                 logp = logp + mode_dist.log_prob(mode_t)
                 mode_sampled = True
             else:
@@ -778,7 +839,12 @@ class PPOAgent:
                     device=self.device,
                 )
                 if power_mask.sum() == 0:
-                    power_mask[:] = True
+                    raise RuntimeError(
+                        f"No affordable power level: "
+                        f"UE={ue_id}, RU={ru_local}, "
+                        f"available_power={power_available:.6f}, "
+                        f"min_power={min(self.power_levels):.6f}"
+                    )
                 power_idx, lp_pw, _ = self._sample_from_logits(power_logits, power_mask)
                 logp = logp + lp_pw
 
@@ -792,17 +858,62 @@ class PPOAgent:
                 du_logits = node_logits[graph_state.du_mask]
                 cu_logits = node_logits[graph_state.cu_mask]
 
-                if has_prev and handover_flag == 1 and ru_logits.numel() > 1:
+                # if has_prev and handover_flag == 1 and ru_logits.numel() > 1:
+                #     prev_ru_local = int(prev["RU"])
+                #     valid_ru_local = torch.ones_like(ru_logits, dtype=torch.bool)
+                #     valid_ru_local[prev_ru_local] = False
+                # else:
+                #     valid_ru_local = None
+
+                # ru_local, lp_ru, _ = self._sample_from_logits(ru_logits, valid_ru_local)
+                # du_local, lp_du, _ = self._sample_from_logits(du_logits)
+                # cu_local, lp_cu, _ = self._sample_from_logits(cu_logits)
+                
+                # =====================================================
+                # Áp dụng mask tài nguyên khi chọn RU / DU / CU
+                # =====================================================
+                valid_ru_local = ru_valid.clone()
+
+                # Nếu thực hiện handover thì không được chọn lại RU cũ
+                if has_prev and handover_flag == 1:
                     prev_ru_local = int(prev["RU"])
-                    valid_ru_local = torch.ones_like(ru_logits, dtype=torch.bool)
-                    valid_ru_local[prev_ru_local] = False
-                else:
-                    valid_ru_local = None
 
-                ru_local, lp_ru, _ = self._sample_from_logits(ru_logits, valid_ru_local)
-                du_local, lp_du, _ = self._sample_from_logits(du_logits)
-                cu_local, lp_cu, _ = self._sample_from_logits(cu_logits)
+                    if 0 <= prev_ru_local < valid_ru_local.numel():
+                        valid_ru_local[prev_ru_local] = False
 
+                # Trường hợp không còn RU hợp lệ sau khi loại RU cũ:
+                # tránh lỗi phân phối rỗng, cho phép chọn các RU khác RU cũ.
+                if valid_ru_local.sum() == 0:
+                    valid_ru_local = torch.ones_like(
+                        ru_logits,
+                        dtype=torch.bool,
+                        device=self.device,
+                    )
+
+                    if has_prev and handover_flag == 1:
+                        valid_ru_local[int(prev["RU"])] = False
+                if valid_ru_local.sum() == 0:
+                    raise RuntimeError(
+                        f"No valid RU after masking: "
+                        f"UE={ue_id}, "
+                        f"handover_flag={handover_flag}, "
+                        f"prev_RU={prev.get('RU')}"
+                    )
+                # Sample node với mask tài nguyên
+                ru_local, lp_ru, _ = self._sample_from_logits(
+                    ru_logits,
+                    valid_ru_local,
+                )
+
+                du_local, lp_du, _ = self._sample_from_logits(
+                    du_logits,
+                    du_valid,
+                )
+
+                cu_local, lp_cu, _ = self._sample_from_logits(
+                    cu_logits,
+                    cu_valid,
+                )
                 ru_global = self._local_to_global(raw_state, "RU", ru_local)
                 du_global = self._local_to_global(raw_state, "DU", du_local)
                 cu_global = self._local_to_global(raw_state, "CU", cu_local)
@@ -960,9 +1071,39 @@ class PPOAgent:
 
                     rb_logits = self.policy.score_rb(req_vec, graph_emb)
                     rb_t = torch.tensor(action.rb_idx, device=self.device)
-                    rb_valid = torch.zeros(self.policy.max_RBs_per_UE, dtype=torch.bool, device=self.device)
-                    rb_max = max(1, min(self.policy.max_RBs_per_UE, rb_rem))
+                    # rb_valid = torch.zeros(self.policy.max_RBs_per_UE, dtype=torch.bool, device=self.device)
+                    # rb_max = max(1, min(self.policy.max_RBs_per_UE, rb_rem))
+                    # rb_valid[:rb_max] = True
+                    
+                    UE = self._get_ue_raw(
+                        raw_state,
+                        ue_id,
+                    )
+
+                    slice_max_RBs = int(
+                        UE.get(
+                            "max_RBs",
+                            self.policy.max_RBs_per_UE,
+                        )
+                    )
+
+                    rb_max = max(
+                        1,
+                        min(
+                            self.policy.max_RBs_per_UE,
+                            slice_max_RBs,
+                            rb_rem,
+                        ),
+                    )
+
+                    rb_valid = torch.zeros(
+                        self.policy.max_RBs_per_UE,
+                        dtype=torch.bool,
+                        device=self.device,
+                    )
+
                     rb_valid[:rb_max] = True
+
                     dist_rb = self._masked_categorical(rb_logits, rb_valid)
                     new_lp = new_lp + dist_rb.log_prob(rb_t)
                     entropy = entropy + dist_rb.entropy()
@@ -1067,6 +1208,12 @@ def train_agent(env, agent, results_dir, max_episode=MAX_EPISODE, update_per_ste
 
                 next_state, reward, done, info = env.step(cached_action.env_action)
                 
+                # if isinstance(info, dict) and not info.get("success", False):
+                #     print(
+                #         f"[REJECT] UE={cached_action.env_action[0]} | "
+                #         f"Action={cached_action.env_action} | "
+                #         f"Info={info}"
+                #     )
                 #print(f"info[{steps}] = {info}")
 
                 next_graph_state = agent.graph_builder.build_graph_state(next_state)

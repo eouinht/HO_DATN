@@ -1,4 +1,9 @@
 import numpy as np
+
+DEBUG_RADIO_METRICS = True
+DEBUG_RADIO_UE_ID = None
+RADIO_LOG_DIR = "./logs"
+
 # =======================================================
 # ================== Tham số mô phỏng ===================
 # =======================================================
@@ -12,8 +17,12 @@ channel_bandwidth_Hz    = 100e6
 #bandwidth_per_RB        = channel_bandwidth_Hz / num_RBs
 bandwidth_per_RB        = num_subcarriers_per_RB * subcarrier_bandwidth_Hz
 
-max_RBs_per_UE = 10
 
+MAX_RBS_PER_SLICE = {
+    "eMBB": 20,
+    "uRLLC": 10,
+}
+max_RBs_per_UE = max(MAX_RBS_PER_SLICE.values())
 # ---------------------- Cấu hình dịch vụ / slice ----------------------
 SLICE_PRESET = {
     'eMBB': {
@@ -29,6 +38,8 @@ SLICE_PRESET = {
         'packet_size_bits'  : 1500 * 8,
         'cycles_per_packet' : 4000.0,
         'lambda_default_pps': 100.0,
+        'max_RBs': MAX_RBS_PER_SLICE["eMBB"],
+        
     },
     'uRLLC': {
         'type'        : 'uRLLC',
@@ -43,6 +54,7 @@ SLICE_PRESET = {
         'packet_size_bits'  : 128 * 8,
         'cycles_per_packet' : 2000.0,
         'lambda_default_pps': 500.0,
+        'max_RBs': MAX_RBS_PER_SLICE["uRLLC"],
     },
 }
 

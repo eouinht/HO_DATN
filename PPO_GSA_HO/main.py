@@ -1,72 +1,149 @@
 import os
-import time
 import random
 import numpy as np
-from pathlib import Path
-from config import *
+import torch
 from datetime import datetime
+
+from config import *
 from env.env_sim import HandOverEnv
-from model.agent_PPO_GSA_MLP import PPOAgent, FullPolicy, train_agent, evaluate_agent, save_checkpoint, load_checkpoint
+from model.agent_PPO_GSA_MLP import (
+    PPOAgent,
+    train_agent,
+    save_checkpoint,
+)
 
 
-# -----------------------------
-# 1. HUẤN LUYỆN PPO (train)
-# -----------------------------
-def train_ppogsa(num_UEs, num_RBs, total_nodes, num_RUs, num_DUs, num_CUs, results_dir):
+# =========================================================
+# Seed
+# =========================================================
+def set_global_seed(seed: int):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+# =========================================================
+# Train PPO
+# =========================================================
+def train_ppogsa(
+    num_UEs,
+    num_RBs,
+    total_nodes,
+    num_RUs,
+    num_DUs,
+    num_CUs,
+    results_dir,
+    max_episode,
+):
     """
     Huấn luyện PPO và lưu checkpoint cuối.
-    Trả về đường dẫn checkpoint.
-    """
 
+    Trả về:
+        checkpoint_path: đường dẫn checkpoint đã lưu
+    """
     learning_rate = 0.001
+
     agent_ppogsa = PPOAgent(
-        learning_rate=learning_rate
+        learning_rate=learning_rate,
+    )
+    radio_log_path = os.path.join(
+        results_dir,
+        "radio_metrics.csv",
+    )
+    
+    env = HandOverEnv(
+        num_UEs,
+        num_RBs,
+        total_nodes,
+        num_RUs,
+        num_DUs,
+        num_CUs,
+        radio_log_path=radio_log_path
     )
 
-    env = HandOverEnv(num_UEs, num_RBs, total_nodes, num_RUs, num_DUs, num_CUs)
+    # Lưu cấu hình huấn luyện
+    config_path = os.path.join(results_dir, "train_config.txt")
+
+    with open(config_path, "w", encoding="utf-8") as f:
+        f.write(f"num_UEs={num_UEs}\n")
+        f.write(f"num_RBs={num_RBs}\n")
+        f.write(f"num_RUs={num_RUs}\n")
+        f.write(f"num_DUs={num_DUs}\n")
+        f.write(f"num_CUs={num_CUs}\n")
+        f.write(f"max_RBs_per_UE={max_RBs_per_UE}\n")
+        f.write(f"learning_rate={learning_rate}\n")
+        f.write(f"max_episode={max_episode}\n")
 
     print("🚀 Bắt đầu huấn luyện PPO agent ...")
-    agent_ppogsa_trained = train_agent(env, agent_ppogsa, results_dir)
 
-    checkpoint_path = os.path.join(results_dir, "checkpoint_PPOGSA.pt")
-    save_checkpoint(agent_ppogsa_trained, checkpoint_path)
+    agent_ppogsa_trained = train_agent(
+        env,
+        agent_ppogsa,
+        results_dir,
+        max_episode=max_episode,
+    )
+    env.close()
+    checkpoint_path = os.path.join(
+        results_dir,
+        "checkpoint_PPOGSA.pt",
+    )
+
+    save_checkpoint(
+        agent_ppogsa_trained,
+        checkpoint_path,
+    )
+
     return checkpoint_path
 
 
+# =========================================================
+# Main
+# =========================================================
 def main():
-
+    results_root = "./results"
     os.makedirs(results_root, exist_ok=True)
 
     configs = [
         (50, 273, 7, 5, 5),
     ]
 
-    for num_UEs, num_RBs, num_RUs, num_DUs, num_CUs in configs:
+    # Test nhanh: 20
+    # Train chính thức: 50000
+    max_episode = 300
 
+    for num_UEs, num_RBs, num_RUs, num_DUs, num_CUs in configs:
         print("\n==============================")
-        print(f"🚀 Chạy thử với {num_UEs} UEs")
+        print(f"🚀 Huấn luyện với {num_UEs} UEs")
         print("==============================")
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        results_dir = os.path.join(results_root, f"run_{timestamp}")
+        results_dir = os.path.join(
+            results_root,
+            f"run_PPOGSA_{num_UEs}UE_{timestamp}",
+        )
+
         os.makedirs(results_dir, exist_ok=True)
 
-        # ---- Train 1 lần ----
-
         total_nodes = num_RUs + num_DUs + num_CUs
-        checkpoint_path = train_ppogsa(num_UEs, num_RBs, total_nodes, num_RUs, num_DUs, num_CUs, results_dir)
-        #train_maxgain(num_UEs, num_RBs, total_nodes, num_RUs, num_DUs, num_CUs, results_dir)
-        #checkpoint_path = r"D:\Research\Handover Problem\Code\PPO_GSA_HO\results\run_20260407_134412\checkpoint_PPOGSA.pt"
-        #evaluate_ppogsa(num_UEs, num_RBs, total_nodes, checkpoint_path, results_dir, num_RUs, num_DUs, num_CUs)
 
+        checkpoint_path = train_ppogsa(
+            num_UEs,
+            num_RBs,
+            total_nodes,
+            num_RUs,
+            num_DUs,
+            num_CUs,
+            results_dir,
+            max_episode=max_episode,
+        )
 
-results_root = "./results"
+        print(f"✅ Checkpoint: {checkpoint_path}")
+
 
 if __name__ == "__main__":
-    # seed
-    seed = 1
-    random.seed(seed)
-    np.random.seed(seed)
+    set_global_seed(1)
     main()
-

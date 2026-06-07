@@ -72,7 +72,11 @@ class MaxGainAgent:
         # =========================
         # RB & power (greedy baseline)
         # =========================
-        num_RB_alloc = int(self.env.num_RBs / self.env.num_UEs)
+        # num_RB_alloc = int(self.env.num_RBs / self.env.num_UEs)
+        num_RB_alloc = min(
+            self.max_RBs_per_UE,
+            max(1, int(self.env.num_RBs / self.env.num_UEs)),
+        )
         power_alloc = float(np.random.choice(self.P_ib_sk_val))
 
         return (
