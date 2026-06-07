@@ -1,15 +1,14 @@
-# Bỏ qua tất cả các file có đuôi .log trong toàn bộ dự án
+
 *.log
 
-# Bỏ qua các file log cụ thể thường sinh ra bởi hệ thống/thư viện
 pip-log.txt
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Bỏ qua toàn bộ một thư mục chuyên chứa log (ví dụ thư mục tên là logs/ hoặc log/)
-/PPO_GSA_HO/logs/
-/PPO_GSA_HO/log/
 
-/PPO_GSA_HO/results/
-/PPO_GSA_HO/results_evaluation/
+PPO_GSA_HO/logs/
+PPO_GSA_HO/log/
+
+PPO_GSA_HO/results/
+PPO_GSA_HO/results_evaluation/
