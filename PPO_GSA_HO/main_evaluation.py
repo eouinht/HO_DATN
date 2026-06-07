@@ -12,7 +12,7 @@ from model.agent_PPO_GSA_MLP import PPOAgent, load_checkpoint
 from model.agent_max_gain import MaxGainAgent
 from model.agent_random import RandomAgent
 from model.agent_noho import NoHandoverAgent
-
+from model.agent_a3offset import A3OffsetAgent
 
 def set_global_seed(seed: int):
     random.seed(seed)
@@ -185,13 +185,15 @@ def main():
         paths_RANDOM = build_result_paths(run_root, "RANDOM")
         paths_MAXGAIN = build_result_paths(run_root, "MAXGAIN")
         paths_NOHO = build_result_paths(run_root, "NO_HANDOVER")
-
+        paths_A3 = build_result_paths(run_root, "A3_OFFSET")
+        
         # Tạo env một lần, giữ xuyên suốt nhiều episode
         envs = {
             "PPOGSA": make_env(num_UEs, num_RBs, num_RUs, num_DUs, num_CUs, seed=base_seed),
             "RANDOM": make_env(num_UEs, num_RBs, num_RUs, num_DUs, num_CUs, seed=base_seed),
             "MAXGAIN": make_env(num_UEs, num_RBs, num_RUs, num_DUs, num_CUs, seed=base_seed),
             "NO_HANDOVER": make_env(num_UEs, num_RBs, num_RUs, num_DUs, num_CUs, seed=base_seed),
+            "A3_OFFSET": make_env(num_UEs, num_RBs, num_RUs, num_DUs, num_CUs, seed=base_seed),
         }
 
         agent_PPOGSA = PPOAgent(learning_rate=0.001)
@@ -201,12 +203,19 @@ def main():
         agent_RANDOM = RandomAgent(envs["RANDOM"])
         agent_MAXGAIN = MaxGainAgent(envs["MAXGAIN"])
         agent_NOHO = NoHandoverAgent(envs["NO_HANDOVER"])
-
+        agent_A3 = A3OffsetAgent(
+            envs["A3_OFFSET"],
+            a3_offset_db=3.0,
+            hysteresis_db=0.5,
+            ttt_steps=2,
+        )
+        
         agents = {
             "PPOGSA": (agent_PPOGSA, paths_PPOGSA),
             "RANDOM": (agent_RANDOM, paths_RANDOM),
             "MAXGAIN": (agent_MAXGAIN, paths_MAXGAIN),
             "NO_HANDOVER": (agent_NOHO, paths_NOHO),
+            "A3_OFFSET": (agent_A3, paths_A3),
         }
 
         for ep in range(1, max_episode + 1):
