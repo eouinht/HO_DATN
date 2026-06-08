@@ -60,7 +60,19 @@ class RandomAgent:
         # =========================
         # Resource allocation
         # =========================
-        num_RB_alloc = int(np.random.randint(1, self.max_RBs_per_UE + 1))
+        slice_max_RBs = int(
+            ue.get(
+                "max_RBs",
+                self.max_RBs_per_UE,
+            )
+        )
+
+        num_RB_alloc = int(
+            np.random.randint(
+                1,
+                slice_max_RBs + 1,
+            )
+        )
         power_alloc = float(np.random.choice(self.power_levels))
 
         return (

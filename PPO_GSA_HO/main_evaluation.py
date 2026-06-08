@@ -197,7 +197,7 @@ def main():
         }
 
         agent_PPOGSA = PPOAgent(learning_rate=0.001)
-        checkpoint_path = "./results/run_PPOGSA_50UE/checkpoint_PPOGSA.pt"
+        checkpoint_path = "./results/run_PPOGSA_50UE_20260607_194452/checkpoint_PPOGSA.pt"
         load_checkpoint(agent_PPOGSA, checkpoint_path, partial=True)
 
         agent_RANDOM = RandomAgent(envs["RANDOM"])

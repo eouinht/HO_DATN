@@ -86,3 +86,48 @@ P_ib_sk_val = generate_power_levels(max_tx_power_watts, num_power_levels)
 k_DU = 5.0     # [cycles/bit] tại DU
 k_CU = 3.0      # [cycles/bit] tại CU
 
+import numpy as np
+
+# =======================================================
+# UE POPULATION
+# =======================================================
+UE_POPULATION_MARGIN = 5
+BASE_ARRIVAL_LAMBDA = 0.8
+POPULATION_CORRECTION_GAIN = 0.25
+MAX_UE_ARRIVALS_PER_STEP = 3
+MAX_RECOVERY_ARRIVALS_PER_STEP = 8
+
+# =======================================================
+# UE MOBILITY - DISCRETE STEP MODEL
+# =======================================================
+UE_STEP_DISTANCE_MIN = 20.0
+UE_STEP_DISTANCE_MAX = 60.0
+UE_STEP_DISTANCE_JITTER = 5.0
+UE_DIRECTION_JITTER_RAD = np.deg2rad(15.0)
+
+# =======================================================
+# UE SESSION LIFECYCLE
+# =======================================================
+MIN_SESSION_STEPS = 10
+MEAN_EXTRA_SESSION_STEPS = 20
+MAX_SESSION_STEPS = 80
+
+# =======================================================
+# QUALITY-BASED DROP
+# =======================================================
+REFERENCE_POWER_PER_RB_W = 1.0
+SNR_DROP_THRESHOLD_DB = 5.0
+DROP_TTT_STEPS = 3
+NEW_UE_DROP_GRACE_STEPS = 3
+
+# =======================================================
+# UE SPAWN
+# =======================================================
+BOUNDARY_SPAWN_RATIO = 0.7
+BOUNDARY_SPAWN_MIN_RATIO = 0.75
+BOUNDARY_SPAWN_MAX_RATIO = 1.0
+
+SLICE_PROBABILITIES = {
+    "eMBB": 0.7,
+    "uRLLC": 0.3,
+}

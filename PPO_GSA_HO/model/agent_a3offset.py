@@ -227,8 +227,17 @@ class A3OffsetAgent:
             if pair not in du_cu_pairs:
                 du_cu_pairs.append(pair)
 
-        rb_max = min(self.max_RBs_per_UE, rb_remaining)
+        slice_max_RBs = int(
+            ue.get(
+                "max_RBs",
+                self.max_RBs_per_UE,
+            )
+        )
 
+        rb_max = min(
+            slice_max_RBs,
+            rb_remaining,
+        )
         for du_choice, cu_choice in du_cu_pairs:
             if not self._ru_has_link_to_du(state, ru_choice, du_choice):
                 continue

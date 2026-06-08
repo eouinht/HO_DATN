@@ -112,7 +112,7 @@ def main():
 
     # Test nhanh: 20
     # Train chính thức: 50000
-    max_episode = 300
+    max_episode = 100
 
     for num_UEs, num_RBs, num_RUs, num_DUs, num_CUs in configs:
         print("\n==============================")

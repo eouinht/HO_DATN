@@ -7,304 +7,516 @@ from config import *
 import os
 import csv
 from pathlib import Path
-class UEManager:
-    def __init__(self, coordinates_RU):
-        self.radius_in = 10
-        self.radius_out = 1000
-        self.SLICE_PRESET = dict(SLICE_PRESET)
-        self.slice_names = list(self.SLICE_PRESET.keys())
-        self.UE_requests = {}
-        self.coordinates_RU = coordinates_RU
+from ue import UEManager
 
+# class UEManager:
+#     def __init__(self, coordinates_RU,target_num_UEs=50):
+#         self.radius_in = 10
+#         self.radius_out = 1000
+#         self.SLICE_PRESET = dict(SLICE_PRESET)
+#         self.slice_names = list(self.SLICE_PRESET.keys())
+#         self.UE_requests = {}
+#         self.coordinates_RU = coordinates_RU
+#         self.target_num_UEs = target_num_UEs
 
-    def empty_status(self):
-        return {"active": 1, "served": False, "reason": None}
-    
-    def empty_alloc(self):
-        return {
-            "RU": None,
-            "DU": None,
-            "CU": None,
-            "num_RB_alloc": 0,
-            "power_alloc": 0.0,
-            "throughput_bps": 0.0,
-            "delay_s": 0.0,
-            "cpu_DU_req": 0.0,
-            "cpu_CU_req": 0.0,
-        }
-
-    def calculate_distances(self, coordinate_UE):
-        distances_RU_UE = []
-        x_UE, y_UE = coordinate_UE
-        for (x_RU, y_RU) in self.coordinates_RU:
-            d = np.sqrt((x_RU - x_UE)**2 + (y_RU - y_UE)**2)
-            distances_RU_UE.append(d)
-        return distances_RU_UE
-
-
-    def calculate_gain(self, distances_RU_UE):
-        """
-        distances_RU_UE: ma trận [num_RUs x num_UEs] khoảng cách RU-UE (m)
-        bandwidth_per_RB: băng thông 1 RB (Hz)
-        """
-        # ------------------- Antenna config -------------------
-        num_antennas = 32  # anten mỗi RU
+#         margin = max(1, int(round(self.target_num_UEs*UE_POPULATION_MARGIN_RATIO)))
+#         self.min_num_UEs = max(1, self.target_num_UEs - margin)
+#         self.max_num_UEs = self.target_num_UEs + margin
         
-        # ------------------- Noise power ----------------------
-        k_B = 1.38064852e-23   # Boltzmann constant (J/K)
-        T_K = 290              # Nhiệt độ (K)
-        N0_W_per_Hz = k_B * T_K
-        noise_figure_dB = 5
-        noise_figure_linear = 10 ** (noise_figure_dB / 10)
-        noise_power_RB = N0_W_per_Hz * bandwidth_per_RB * noise_figure_linear
+#     def initialize_mobility_state(self):
+#         """
+#         Khởi tạo trạng thái mobility cho một UE.
+
+#         Mỗi UE có:
+#             - speed_mps: tốc độ hiện tại [m/s]
+#             - direction_rad: hướng di chuyển [rad]
+#         """
+#         return {
+#             "speed_mps": float(
+#                 np.random.uniform(
+#                     UE_SPEED_MIN_MPS,
+#                     UE_SPEED_MAX_MPS,
+#                 )
+#             ),
+
+#             "direction_rad": float(
+#                 np.random.uniform(
+#                     0.0,
+#                     2.0 * np.pi,
+#                 )
+#             ),
+#         }
         
-        # ------------------- Carrier frequency ----------------
-        f_c_GHz = 6
-        gain = []
-        for d in distances_RU_UE:
-            # ------------------- Pathloss model (3GPP UMa) --------
-            path_loss_db = 28 + 20 * np.log10(f_c_GHz) + 22 * np.log10(d)
-
-            # ------------------- Pathloss linear ------------------
-            path_loss_linear = 10 ** (-path_loss_db / 10)
-
-
-            # kênh MIMO Rayleigh (num_antennas anten)
-            h_real = np.random.randn(num_antennas)
-            h_imag = np.random.randn(num_antennas)
-            h = np.sqrt(path_loss_linear) * (h_real + 1j*h_imag) / np.sqrt(2)
-                
-            # power gain (chuẩn hóa theo norm-2)
-            channel = norm(h, 2) ** 2
-
-            gain.append(channel / noise_power_RB)
-        return gain
-
-    def compute_UE_metrics(self, coordinate_UE):
-        distances = self.calculate_distances(coordinate_UE)
-        gain = self.calculate_gain(distances)
-        return distances, gain
-
-    def set_coordinate_UE(self):
-        angles = np.random.uniform(0, 2 * np.pi)
-        r = np.random.uniform(self.radius_in, self.radius_out)
-
-        x = r * np.cos(angles)
-        y = r * np.sin(angles)
-
-        new_coords = (x, y)
-
-        return new_coords
+#     def empty_status(self):
+#         return {"active": 1, "served": False, "reason": None}
     
-    def is_valid_position(self, coord):
-        x, y = coord
-        dist = np.hypot(x, y)
-        return self.radius_in <= dist <= self.radius_out
+#     def empty_alloc(self):
+#         return {
+#             "RU": None,
+#             "DU": None,
+#             "CU": None,
+#             "num_RB_alloc": 0,
+#             "power_alloc": 0.0,
+#             "throughput_bps": 0.0,
+#             "delay_s": 0.0,
+#             "cpu_DU_req": 0.0,
+#             "cpu_CU_req": 0.0,
+#         }
+
+#     def calculate_distances(self, coordinate_UE):
+#         distances_RU_UE = []
+#         x_UE, y_UE = coordinate_UE
+#         for (x_RU, y_RU) in self.coordinates_RU:
+#             d = np.sqrt((x_RU - x_UE)**2 + (y_RU - y_UE)**2)
+#             distances_RU_UE.append(d)
+#         return distances_RU_UE
 
 
-    def build_UE_request(self, ue_id):
-        slice_name = np.random.choice(self.slice_names, p=[0.7, 0.3])
-        coordinate_UE = self.set_coordinate_UE()
-        distances_RU_UE = self.calculate_distances(coordinate_UE)
-        gains_UE = self.calculate_gain(distances_RU_UE)
-
-        self.UE_requests[ue_id] = {
-            "id": int(ue_id),
-            **copy.deepcopy(self.SLICE_PRESET[slice_name]),
-
-            "coordinate": coordinate_UE,
-            "distances_RU_UE": distances_RU_UE,
-            "gain": gains_UE,
-
-            "status": self.empty_status(),
-
-            "allocation": self.empty_alloc(),
-            "prev_allocation": self.empty_alloc(),
-            
-            "pingpong": 0,
-            "handover_count": 0,
-        }
-    
-    
-    def add_UEs_requests(self, new_UEs_request):
-        if new_UEs_request <= 0:
-            return []
-        start_id = max(self.UE_requests.keys(), default=-1) + 1
-
-        new_ids = list(range(start_id, start_id + new_UEs_request))
-
-        for ue_id in new_ids:
-            self.build_UE_request(ue_id)
-
-        return new_ids
-
-    def remove_UE(self, ue_id):
-        return self.UE_requests.pop(ue_id, None)
-
-    def remove_random_UEs(self, n_UEs_remove):
-        ue_ids = list(self.UE_requests.keys())
-
-        n_UEs_remove = min(int(n_UEs_remove), len(ue_ids))
-
-        remove_ids = list(np.random.choice(ue_ids, n_UEs_remove, replace=False))
-
-        removed_ues = []
-        for ue_id in remove_ids:
-            ue_info = self.remove_UE(ue_id)
-            removed_ues.append((ue_id, ue_info))
-
-        return removed_ues
-
-    # def adjust_coordinates_UE(self, coordinate_UE): 
+#     def calculate_gain(self, distances_RU_UE):
+#         """
+#         distances_RU_UE: ma trận [num_RUs x num_UEs] khoảng cách RU-UE (m)
+#         bandwidth_per_RB: băng thông 1 RB (Hz)
+#         """
+#         # ------------------- Antenna config -------------------
+#         num_antennas = 32  # anten mỗi RU
         
-    #     delta_coordinate = 500
-    #     x, y = coordinate_UE
+#         # ------------------- Noise power ----------------------
+#         k_B = 1.38064852e-23   # Boltzmann constant (J/K)
+#         T_K = 290              # Nhiệt độ (K)
+#         N0_W_per_Hz = k_B * T_K
+#         noise_figure_dB = 5
+#         noise_figure_linear = 10 ** (noise_figure_dB / 10)
+#         noise_power_RB = N0_W_per_Hz * bandwidth_per_RB * noise_figure_linear
+        
+#         # ------------------- Carrier frequency ----------------
+#         f_c_GHz = 6
+#         gain = []
+#         for d in distances_RU_UE:
+#             # ------------------- Pathloss model (3GPP UMa) --------
+#             path_loss_db = 28 + 20 * np.log10(f_c_GHz) + 22 * np.log10(d)
 
-    #     delta_x = np.random.uniform(-delta_coordinate, delta_coordinate)
-    #     delta_y = np.random.uniform(-delta_coordinate, delta_coordinate)
-            
-    #     #Tọa độ mới sau khi thêm độ lệch
-    #     new_x = x + delta_x
-    #     new_y = y + delta_y
-            
-    #     return (new_x, new_y)
+#             # ------------------- Pathloss linear ------------------
+#             path_loss_linear = 10 ** (-path_loss_db / 10)
+
+
+#             # kênh MIMO Rayleigh (num_antennas anten)
+#             h_real = np.random.randn(num_antennas)
+#             h_imag = np.random.randn(num_antennas)
+#             h = np.sqrt(path_loss_linear) * (h_real + 1j*h_imag) / np.sqrt(2)
+                
+#             # power gain (chuẩn hóa theo norm-2)
+#             channel = norm(h, 2) ** 2
+
+#             gain.append(channel / noise_power_RB)
+#         return gain
+
+#     def calculate_best_reference_snr_db(self,ue_info):
+#         """
+#         Tính SNR tham chiếu tốt nhất mà UE có thể nhận được
+#         từ toàn bộ RU.
+
+#         gain trong mô hình đã được chuẩn hóa theo noise power
+#         của một RB:
+
+#             gain = channel_gain / noise_power_RB
+
+#         Do đó:
+
+#             SNR_ref = reference_power_per_RB * gain
+#         """
+#         gains = np.asarray(ue_info.get("gain",[],),dtype=float,)
+        
+#         if gains.size == 0:
+#             return -float("inf")
+
+#         snr_linear = (
+#             REFERENCE_POWER_PER_RB_W
+#             *
+#             gains
+#         )
+
+#         best_snr_linear = float(
+#             np.max(
+#                 snr_linear
+#             )
+#         )
+
+#         best_snr_db = 10.0 * np.log10(
+#             max(
+#                 best_snr_linear,
+#                 1e-30,
+#             )
+#         )
+
+#         return float(
+#             best_snr_db
+#         )
     
-    def UE_mobility(self):
-        #print("UE mobilityyyyyyyyyyyyyyyyyyyyyyy")
-        max_UE = 100
-        min_UE = 10
-        max_UE_add = 2
-        max_UE_departure = 2
-        removed_ues_with_info = []
-        num_UE_request = len(self.UE_requests)
+#     def compute_UE_metrics(self, coordinate_UE):
+#         distances = self.calculate_distances(coordinate_UE)
+#         gain = self.calculate_gain(distances)
+#         return distances, gain
 
-        # =========================
-        if num_UE_request <= min_UE:
-            # Thêm UE mới
-            id_new_UE = self.add_UEs_requests(max_UE_add)
+#     def set_coordinate_UE(self):
+#         angles = np.random.uniform(0, 2 * np.pi)
+#         r = np.random.uniform(self.radius_in, self.radius_out)
 
-            # UE còn lại di chuyển
-            for UE_id in list(self.UE_requests.keys()):
-                old_coordinate = self.UE_requests[UE_id]["coordinate"]
-                new_coord = self.adjust_coordinates_UE(old_coordinate)
+#         x = r * np.cos(angles)
+#         y = r * np.sin(angles)
 
-                if not self.is_valid_position(new_coord):
-                    #print("Lỗi toạ độ mới")
-                    ue_info = self.remove_UE(UE_id)
-                    removed_ues_with_info.append((UE_id, ue_info))
-                    continue
+#         new_coords = (x, y)
 
-                # Update nếu hợp lệ
-                distances, gain = self.compute_UE_metrics(new_coord)
-                self.UE_requests[UE_id]["coordinate"] = new_coord
-                self.UE_requests[UE_id]["distances_RU_UE"] = distances
-                self.UE_requests[UE_id]["gain"] = gain
-                self.UE_requests[UE_id]["status"]["active"] = 1
-                
+#         return new_coords
+    
+#     def is_valid_position(self, coord):
+#         x, y = coord
+#         dist = np.hypot(x, y)
+#         return self.radius_in <= dist <= self.radius_out
 
-            return removed_ues_with_info, id_new_UE
-        else: 
-            # UE cũ rời đi ngẫu nhiên
-            num_departures = np.random.randint(0, max_UE_departure + 1)
 
-            departed_ues = self.remove_random_UEs(num_departures)
-            removed_ues_with_info.extend(departed_ues)
+#     def build_UE_request(self, ue_id):
+#         slice_name = np.random.choice(self.slice_names, p=[0.7, 0.3])
+#         coordinate_UE = self.set_coordinate_UE()
+#         distances_RU_UE = self.calculate_distances(coordinate_UE)
+#         gains_UE = self.calculate_gain(distances_RU_UE)
 
-            # UE cũ còn lại di chuyển
-            for UE_id in list(self.UE_requests.keys()):
-                old_coordinate = self.UE_requests[UE_id]["coordinate"]
-                new_coord = self.adjust_coordinates_UE(old_coordinate)
+#         self.UE_requests[ue_id] = {
+#             "id": int(ue_id),
+#             **copy.deepcopy(self.SLICE_PRESET[slice_name]),
 
-                # if not self.is_valid_position(new_coord):
-                #     #print("Lỗi toạ độ mới")
-                #     ue_info = self.remove_UE(UE_id)
-                #     removed_ues_with_info.append((UE_id, ue_info))
-                #     continue
+#             "coordinate": coordinate_UE,
+#             "distances_RU_UE": distances_RU_UE,
+#             "gain": gains_UE,
 
-                
-                 # Update nếu hợp lệ
-                distances, gain = self.compute_UE_metrics(new_coord)
-                self.UE_requests[UE_id]["coordinate"] = new_coord
-                self.UE_requests[UE_id]["distances_RU_UE"] = distances
-                self.UE_requests[UE_id]["gain"] = gain
-                self.UE_requests[UE_id]["status"]["active"] = 1
+#             "status": self.empty_status(),
+
+#             "allocation": self.empty_alloc(),
+#             "prev_allocation": self.empty_alloc(),
             
-            # UE mới thêm vào
-            new_UEs_request = np.random.randint(0, min(max_UE_add, max_UE - num_UE_request) + 1)
-            id_new_UE = self.add_UEs_requests(new_UEs_request)
+#             "pingpong": 0,
+#             "handover_count": 0,
+#             "mobility": self.initialize_mobility_state(),
+#             "coverage": {
+#                 "drop_counter": 0,
+#                 "best_reference_snr_db": None,
+#             },
+#         }
+    
+    
+#     def add_UEs_requests(self, new_UEs_request):
+#         if new_UEs_request <= 0:
+#             return []
+#         start_id = max(self.UE_requests.keys(), default=-1) + 1
 
-            return removed_ues_with_info, id_new_UE
+#         new_ids = list(range(start_id, start_id + new_UEs_request))
 
-    def adjust_coordinates_UE(self, coordinate_UE):
-        delta_coordinate = 1000
-        x, y = coordinate_UE
+#         for ue_id in new_ids:
+#             self.build_UE_request(ue_id)
 
-        delta_x = np.random.uniform(-delta_coordinate, delta_coordinate)
-        delta_y = np.random.uniform(-delta_coordinate, delta_coordinate)
+#         return new_ids
 
-        new_x = x + delta_x
-        new_y = y + delta_y
+#     def remove_UE(self, ue_id):
+#         return self.UE_requests.pop(ue_id, None)
 
-        # Đưa UE về đúng vùng mô phỏng nếu đi ra ngoài
-        dist = np.hypot(new_x, new_y)
+#     def remove_random_UEs(self, n_UEs_remove):
+#         ue_ids = list(self.UE_requests.keys())
 
-        if dist < self.radius_in:
-            if dist < 1e-12:
-                angle = np.random.uniform(0, 2 * np.pi)
-                new_x = self.radius_in * np.cos(angle)
-                new_y = self.radius_in * np.sin(angle)
-            else:
-                scale = self.radius_in / dist
-                new_x *= scale
-                new_y *= scale
+#         n_UEs_remove = min(int(n_UEs_remove), len(ue_ids))
 
-        elif dist > self.radius_out:
-            scale = self.radius_out / dist
-            new_x *= scale
-            new_y *= scale
+#         remove_ids = list(np.random.choice(ue_ids, n_UEs_remove, replace=False))
 
-        return (new_x, new_y)
+#         removed_ues = []
+#         for ue_id in remove_ids:
+#             ue_info = self.remove_UE(ue_id)
+#             removed_ues.append((ue_id, ue_info))
 
+#         return removed_ues
 
-    # def UE_mobility(self):
-    #     """
-    #     Chỉ di chuyển UE, không thêm và không xóa UE.
-    #     Trả về:
-    #         removed_ues_with_info = []   # luôn rỗng
-    #         id_new_UE = []               # luôn rỗng
-    #     """
-    #     removed_ues_with_info = []
-    #     id_new_UE = []
+    
+#     def UE_mobility(self):
+#         """
+#         Cập nhật UE mobility và thực hiện quality-based drop.
 
-    #     for UE_id in list(self.UE_requests.keys()):
-    #         old_coordinate = self.UE_requests[UE_id]["coordinate"]
-    #         new_coord = self.adjust_coordinates_UE(old_coordinate)
+#         Luồng:
+#             1. Di chuyển UE.
+#             2. Tính lại distances và gain.
+#             3. Kiểm tra best SNR trên toàn bộ RU.
+#             4. Drop UE nếu tín hiệu yếu liên tục.
+#             5. Bổ sung UE mới để population quay về gần target.
 
-    #         distances, gain = self.compute_UE_metrics(new_coord)
-    #         self.UE_requests[UE_id]["coordinate"] = new_coord
-    #         self.UE_requests[UE_id]["distances_RU_UE"] = distances
-    #         self.UE_requests[UE_id]["gain"] = gain
-    #         self.UE_requests[UE_id]["status"]["active"] = 1
+#         Return:
+#             removed_ues_with_info:
+#                 UE bị drop để caller release resource.
 
-    #     return removed_ues_with_info, id_new_UE
+#             id_new_UE:
+#                 ID của các UE mới được thêm vào.
+#         """
+#         removed_ues_with_info = []
 
-    def update_UE_request(self, ue_id, update_dict):
-        ue = self.UE_requests[ue_id]
+#         # =================================================
+#         # 1. Mobility + quality-based drop
+#         # =================================================
+#         for UE_id in list(
+#             self.UE_requests.keys()
+#         ):
+#             UE = self.UE_requests[
+#                 UE_id
+#             ]
 
-        for key, value in update_dict.items():
-            # Nếu là dict → update sâu (merge)
-            if isinstance(value, dict) and key in ue and isinstance(ue[key], dict):
-                ue[key].update(value)
-            else:
-                # Gán trực tiếp
-                ue[key] = value
+#             mobility_state = UE.setdefault(
+#                 "mobility",
+#                 self.initialize_mobility_state(),
+#             )
 
-    def check_UE_all_inactive(self):
-        if not self.UE_requests:
-            return True
-        return all(int(ue["status"].get("active", 0)) == 0 for ue in self.UE_requests.values())
+#             new_coord = self.adjust_coordinates_UE(
+#                 UE[
+#                     "coordinate"
+#                 ],
+#                 mobility_state,
+#             )
 
+#             distances, gain = (
+#                 self.compute_UE_metrics(
+#                     new_coord
+#                 )
+#             )
 
+#             UE[
+#                 "coordinate"
+#             ] = new_coord
+
+#             UE[
+#                 "distances_RU_UE"
+#             ] = distances
+
+#             UE[
+#                 "gain"
+#             ] = gain
+
+#             should_drop, best_snr_db = (
+#                 self.update_drop_state(
+#                     UE
+#                 )
+#             )
+
+#             if should_drop:
+#                 print(
+#                     f"[DROP] "
+#                     f"UE={UE_id} | "
+#                     f"BestSNR={best_snr_db:.2f} dB | "
+#                     f"Counter="
+#                     f"{UE['coverage']['drop_counter']}/"
+#                     f"{DROP_TTT_STEPS}"
+#                 )
+#                 removed_UE = self.remove_UE(
+#                     UE_id
+#                 )
+
+#                 removed_ues_with_info.append(
+#                     (
+#                         UE_id,
+#                         removed_UE,
+#                     )
+#                 )
+
+#                 continue
+
+#             UE["status"]["active"] = 1
+
+#         # =================================================
+#         # 2. Bổ sung UE mới nếu tải giảm
+#         # =================================================
+#         id_new_UE = (
+#             self.rebalance_UE_population()
+#         )
+#         print(
+#             f"[MOBILITY] "
+#             f"UEs={len(self.UE_requests)} | "
+#             f"Dropped={len(removed_ues_with_info)} | "
+#             f"Added={len(id_new_UE)}"
+#         )
+#         return (
+#             removed_ues_with_info,
+#             id_new_UE,
+#         )
+
+#     def adjust_coordinates_UE(self, coordinate_UE, mobility_state):
+#         """
+#             Cập nhật vị trí UE theo correlated random walk.
+
+#             Công thức:
+#                 step_distance = speed × delta_t
+
+#                 x_new = x_old + step_distance × cos(direction)
+#                 y_new = y_old + step_distance × sin(direction)
+
+#             Trong giai đoạn hiện tại:
+#                 - chưa drop UE;
+#                 - nếu UE đi quá biên thì phản xạ tạm thời.
+#         """
+#         # delta_coordinate = 1000
+#         x, y = coordinate_UE
+#         old_speed = float(mobility_state["speed_mps"])
+#         speed_jitter=float(np.random.uniform(- UE_SPEED_JITTER_MPS, UE_SPEED_JITTER_MPS))
+#         new_speed = float(np.clip(old_speed + speed_jitter, UE_SPEED_MIN_MPS, UE_SPEED_MAX_MPS))
+        
+#         # delta_x = np.random.uniform(-delta_coordinate, delta_coordinate)
+#         # delta_y = np.random.uniform(-delta_coordinate, delta_coordinate)
+
+#         # new_x = x + delta_x
+#         # new_y = y + delta_y
+
+#         # Đưa UE về đúng vùng mô phỏng nếu đi ra ngoài
+#         # dist = np.hypot(new_x, new_y)
+
+#         # if dist < self.radius_in:
+#         #     if dist < 1e-12:
+#         #         angle = np.random.uniform(0, 2 * np.pi)
+#         #         new_x = self.radius_in * np.cos(angle)
+#         #         new_y = self.radius_in * np.sin(angle)
+#         #     else:
+#         #         scale = self.radius_in / dist
+#         #         new_x *= scale
+#         #         new_y *= scale
+
+#         # elif dist > self.radius_out:
+#         #     scale = self.radius_out / dist
+#         #     new_x *= scale
+#         #     new_y *= scale
+
+#         old_direction = float(mobility_state["direction_rad"])
+#         direction_jitter = float(np.random.uniform(-UE_DIRECTION_JITTER_RAD, UE_DIRECTION_JITTER_RAD))
+#         new_direction = float((old_direction+direction_jitter)%(2.0*np.pi))
+        
+#         step_distance = new_speed*MOBILITY_TIME_STEP_S
+#         new_x = (x + step_distance*np.cos(new_direction))
+#         new_y = (y + step_distance*np.sin(new_direction))
+        
+#         # dist = float(np.hypot(new_x, new_y))
+        
+#         # if (dist < self.radius_in or dist > self.radius_out):
+#         #     # Đảo hướng gần 180 độ
+#         #     new_direction = (new_direction + np.pi) % (2.0*np.pi)
+
+#         #     new_x = (x + step_distance*np.cos(new_direction))
+#         #     new_y = (y + step_distance*np.sin(new_direction))
+
+#         #     # Guard dự phòng nếu vẫn vượt biên
+#         #     dist = float(np.hypot(new_x, new_y))
+#         #     if dist > self.radius_out:
+#         #         scale = (self.radius_out/max(dist,1e-12))
+#         #         new_x *= scale
+#         #         new_y *= scale
+
+#         #     elif dist < self.radius_in:
+#         #         if dist < 1e-12:
+#         #             angle = float(np.random.uniform(0.0,2.0 * np.pi,))
+#         #             new_x = (self.radius_in *np.cos(angle))
+#         #             new_y = (self.radius_in*np.sin(angle))
+
+#         #         else:
+#         #             scale = (self.radius_in /dist)
+#         #             new_x *= scale
+#         #             new_y *= scale
+
+#         # =================================================
+#         # 5. Ghi lại trạng thái mobility
+#         # =================================================
+#         mobility_state["speed_mps"] = (
+#             float(
+#                 new_speed
+#             )
+#         )
+
+#         mobility_state["direction_rad"] = (
+#             float(
+#                 new_direction
+#             )
+#         )
+
+#         return (new_x, new_y)
+
+#     def update_UE_request(self, ue_id, update_dict):
+#         ue = self.UE_requests[ue_id]
+
+#         for key, value in update_dict.items():
+#             # Nếu là dict → update sâu (merge)
+#             if isinstance(value, dict) and key in ue and isinstance(ue[key], dict):
+#                 ue[key].update(value)
+#             else:
+#                 # Gán trực tiếp
+#                 ue[key] = value
+
+#     def update_drop_state(self, ue_info):
+#         """
+#         Cập nhật bộ đếm drop của một UE.
+
+#         UE bị drop khi best reference SNR từ tất cả RU
+#         thấp hơn ngưỡng trong DROP_TTT_STEPS liên tiếp.
+
+#         Return:
+#             should_drop: bool
+#             best_snr_db: float
+#         """
+#         best_snr_db = self.calculate_best_reference_snr_db(ue_info)
+#         coverage = ue_info.setdefault(
+#             "coverage",
+#             {
+#                 "drop_counter": 0,
+#                 "best_reference_snr_db": None,
+#             },
+#         )
+#         coverage["best_reference_snr_db"] = float(best_snr_db)
+#         if (best_snr_db < SNR_DROP_THRESHOLD_DB):
+#             coverage["drop_counter"] = int(coverage.get("drop_counter", 0)) + 1
+#         else: 
+#             coverage["drop_counter"] = 0
+        
+#         should_drop = (coverage["drop_counter"] >= DROP_TTT_STEPS)
+#         return (bool(should_drop), float(best_snr_db))
+        
+    
+#     def check_UE_all_inactive(self):
+#         if not self.UE_requests:
+#             return True
+#         return all(int(ue["status"].get("active", 0)) == 0 for ue in self.UE_requests.values())
+
+#     def rebalance_UE_population(self):
+#         """
+#         Bổ sung UE mới để giữ population quanh target.
+
+#         Không remove UE ngẫu nhiên.
+#         UE chỉ bị remove bởi quality-based drop.
+#         """
+#         id_new_UE = []
+
+#         current_num_UEs = len(
+#             self.UE_requests
+#         )
+
+#         # Nếu số UE vẫn đủ cao thì không thêm
+#         if (
+#             current_num_UEs
+#             >=
+#             self.target_num_UEs
+#         ):
+#             return id_new_UE
+
+#         num_to_add = min(
+#             MAX_UE_CHURN_PER_STEP,
+#             self.target_num_UEs
+#             -
+#             current_num_UEs,
+#         )
+
+#         if num_to_add > 0:
+#             id_new_UE.extend(
+#                 self.add_UEs_requests(
+#                     num_to_add
+#                 )
+#             )
+
+#         return id_new_UE
 
 class ResourceManager:
     """Quản lý tài nguyên: RB, RU, DU, CU."""
@@ -470,7 +682,7 @@ class HandOverEnv:
 
         # -------------------- Managers --------------------    
         self.resource_manager = ResourceManager(self.num_RBs, self.num_RUs, self.num_DUs, self.num_CUs)
-        self.UE_manager = UEManager(self.resource_manager.coordinates_RU)
+        self.UE_manager = UEManager(self.resource_manager.coordinates_RU, target_num_UEs=self.num_UEs)
         self.resource_manager.reset()
         _ = self.UE_manager.add_UEs_requests(self.num_UEs)
         # =====================================================
@@ -1056,9 +1268,9 @@ class HandOverEnv:
             # Đẩy dữ liệu xuống ổ đĩa ngay
             f.flush()
 
-        print(
-            f"[RADIO LOG] Written to: {log_path}"
-        )
+        # print(
+        #     f"[RADIO LOG] Written to: {log_path}"
+        # )
     # ======================================================================
     # Basics
     # ======================================================================
